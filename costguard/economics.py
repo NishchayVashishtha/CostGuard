@@ -13,6 +13,7 @@ from .models import (
     ComparisonRequest,
     MetricComparison,
     ModelCall,
+    OutcomeEconomics,
     PricingCatalog,
     PolicyResult,
     Schema,
@@ -40,6 +41,7 @@ class ComparisonDetails(Schema):
     p95_case_cost_usd: MetricComparison | None = None
     p95_latency_ms: MetricComparison | None = None
     contributors: list[str] = Field(default_factory=list)
+    outcome_economics: OutcomeEconomics | None = None
 
 
 def case_cost(case: CaseExecution, prices: PricingCatalog) -> Decimal | None:
@@ -217,6 +219,7 @@ def compare_artifacts(
         p95_case_cost_usd=p95_cost,
         p95_latency_ms=p95_latency,
         contributors=contributors,
+        outcome_economics=economic.outcome_economics if economic else None,
     )
 
 
@@ -233,4 +236,5 @@ def _to_workload_run(case: CaseExecution, evaluator: str | None, pricing: Pricin
         latency_ms=case.latency_ms,
         quality_score=quality,
         additional_charges_usd=sum((charge.amount_usd for charge in case.charges), Decimal("0")),
+        status=case.status,
     )

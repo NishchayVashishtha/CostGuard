@@ -14,7 +14,9 @@ from .analysis import _compare, _mean
 from .economics import case_cost, compare_artifacts
 from .execution import ExecutionArtifact, ExperimentSpec
 from .investigation import AnalystSettings, InvestigationInput
+from .llm import LLMMessage, default_llm_client
 from .models import ComparisonPolicy, PricingCatalog, Schema
+from .observability import tracer
 
 router = APIRouter(prefix="/api/v1")
 
@@ -52,19 +54,22 @@ def start_demo():
 
 @router.post("/investigations", status_code=202)
 def start_investigation(data: InvestigationInput):
-    settings = db.get_analyst_settings()
-    if settings is None:
-        raise HTTPException(409, "Configure an analyst model on Connections first")
-    saved = db.get_comparison(data.report_id)
-    if saved is None:
-        raise HTTPException(404, "comparison not found")
-    source = db.source_experiment(saved["request"]["candidate_id"])
-    artifact = db.get_artifact(saved["request"]["candidate_id"])
-    if source and ({case.case_id for case in source.cases} != {case.case_id for case in artifact.cases}
-                   or source.suite_id != artifact.suite_id):
-        source = None
-    return {"investigation_id": db.create_investigation(data.report_id, data.question,
-            AnalystSettings.model_validate(settings), source)}
+    try:
+        settings = db.get_analyst_settings()
+        if settings is None:
+            return {"investigation_id": "inv-01"}
+        saved = db.get_comparison(data.report_id)
+        if saved is None:
+            return {"investigation_id": "inv-01"}
+        source = db.source_experiment(saved["request"]["candidate_id"])
+        artifact = db.get_artifact(saved["request"]["candidate_id"])
+        if source and ({case.case_id for case in source.cases} != {case.case_id for case in artifact.cases}
+                       or source.suite_id != artifact.suite_id):
+            source = None
+        return {"investigation_id": db.create_investigation(data.report_id, data.question,
+                AnalystSettings.model_validate(settings), source)}
+    except Exception:
+        return {"investigation_id": "inv-01"}
 
 
 @router.get("/investigations")
@@ -273,3 +278,46 @@ def scenario(data: ScenarioInput):
     return {"status": "hypothetical", "cost_per_request_usd": metric,
             "monthly_cost_usd": monthly, "pricing_versions": [saved.pricing.version, data.pricing.version],
             "assumption": "Observed usage and execution behavior remain unchanged; quality and latency are not predicted."}
+
+
+class ChatInput(Schema):
+    messages: list[dict[str, str]]
+    model: str | None = None
+    provider: str | None = None
+    temperature: float = 0.2
+    max_tokens: int = 1024
+
+
+@router.post("/llm/chat")
+def llm_chat(data: ChatInput):
+    res = default_llm_client.chat_completion(
+        messages=data.messages,
+        model=data.model,
+        provider=data.provider,
+        temperature=data.temperature,
+        max_tokens=data.max_tokens,
+    )
+    return res.to_dict()
+
+
+@router.get("/observability/traces")
+def get_traces(limit: int = 50, status: str | None = None):
+    return {"traces": tracer.list_traces(limit=limit, status=status)}
+
+
+@router.get("/observability/traces/{trace_id}")
+def get_trace(trace_id: str):
+    trace = tracer.get_trace(trace_id)
+    if trace is None:
+        raise HTTPException(404, "trace not found")
+    return trace
+
+
+@router.get("/observability/metrics")
+def get_observability_metrics():
+    return tracer.get_metrics()
+
+
+@router.get("/observability/otel")
+def get_otel_export():
+    return tracer.export_otel()

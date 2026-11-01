@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}Observability & Trace Telemetry · CostGuard{% endblock %}
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+  <div>
+    <h1>LLM Observability & Distributed Tracing</h1>
+    <p class="muted">OpenTelemetry-compatible distributed traces, span waterfalls, token latency breakdown, and execution profiling.</p>
+  </div>
+  <div style="display: flex; gap: 0.75rem;">
+    <a class="button" href="/api/v1/observability/otel" target="_blank" style="background: #1e3d31; font-size: 0.9rem;">Export OpenTelemetry JSON</a>
+    <button onclick="refreshTraces()" style="font-size: 0.9rem;">Refresh Telemetry</button>
+  </div>
+</div>
+
+<!-- Telemetry KPI Cards -->
+<div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));">
+  <div class="card" style="border-top: 4px solid #176a50;">
+    <h2 style="font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; color: #586a66; margin: 0 0 0.5rem;">P95 Latency</h2>
+    <div class="metric" style="color: #102e29;">{{ metrics.p95_latency_ms }} <span style="font-size: 1rem; font-weight: normal; color: #586a66;">ms</span></div>
+    <p class="muted" style="margin: 0.3rem 0 0; font-size: 0.85rem;">Mean: {{ metrics.mean_latency_ms }} ms · P50: {{ metrics.p50_latency_ms }} ms</p>
+  </div>
+
+  <div class="card" style="border-top: 4px solid #0284c7;">
+    <h2 style="font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; color: #586a66; margin: 0 0 0.5rem;">Time to First Token (TTFT)</h2>
+    <div class="metric" style="color: #0369a1;">{{ metrics.avg_ttft_ms }} <span style="font-size: 1rem; font-weight: normal; color: #586a66;">ms</span></div>
+    <p class="muted" style="margin: 0.3rem 0 0; font-size: 0.85rem;">Streaming response latency average</p>
+  </div>
+
+  <div class="card" style="border-top: 4px solid #8b5cf6;">
+    <h2 style="font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; color: #586a66; margin: 0 0 0.5rem;">Token Throughput</h2>
+    <div class="metric" style="color: #6d28d9;">{{ metrics.tokens_per_second }} <span style="font-size: 1rem; font-weight: normal; color: #586a66;">tok/s</span></div>
+    <p class="muted" style="margin: 0.3rem 0 0; font-size: 0.85rem;">{{ metrics.total_tokens }} total tokens processed</p>
+  </div>
+
+  <div class="card" style="border-top: 4px solid {% if metrics.error_rate_percent > 0 %}#e11d48{% else %}#16a34a{% endif %};">
+    <h2 style="font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; color: #586a66; margin: 0 0 0.5rem;">Error / Regression Rate</h2>
+    <div class="metric" style="color: {% if metrics.error_rate_percent > 0 %}#be123c{% else %}#15803d{% endif %};">{{ metrics.error_rate_percent }}%</div>
+    <p class="muted" style="margin: 0.3rem 0 0; font-size: 0.85rem;">{{ metrics.total_traces }} active traces ({{ metrics.total_spans }} spans)</p>
+  </div>
+</div>
+
+<!-- Live Interactive LLM Testing Sandbox -->
+<section class="card" style="background: linear-gradient(145deg, #ffffff, #f7faf8); border-left: 4px solid #176a50;">
+  <h2>Live LLM Execution & Trace Generator</h2>
+  <p class="muted" style="margin-top: 0.2rem;">Send a query through the CostGuard unified LLM engine to trigger live inference, RAG retrieval, and immediate trace generation.</p>
+  <div style="display: flex; gap: 0.75rem; margin-top: 1rem; flex-wrap: wrap;">
+    <input id="prompt-input" type="text" placeholder="Ask a question (e.g., 'How does CostGuard gate CI/CD regressions?' or 'What are valid step kinds?')" value="How does CostGuard gate regressions in CI/CD?" style="flex: 1; min-width: 280px;">
+    <button onclick="runLiveLLM()" id="run-llm-btn" style="min-width: 140px;">Execute LLM Call</button>
+  </div>
+  <div id="llm-output" class="notice" style="display: none; margin-top: 1rem; background: #eaf4ef; border: 1px solid #c7e2d3;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+      <strong style="color: #102e29;" id="llm-model-badge">LLM Output</strong>
+      <span class="muted" id="llm-stats-badge" style="font-size: 0.85rem;"></span>
+    </div>
+    <div id="llm-response-text" style="font-family: inherit; line-height: 1.5; color: #172024;"></div>
+  </div>
+</section>
+
+<!-- Distributed Trace Explorer & Waterfall -->
+<section class="card">
+  <h2>Distributed Traces (OpenTelemetry Spans)</h2>
+  <p class="muted">Click any trace below to expand its hierarchical span waterfall, latency flame bars, and token telemetry.</p>
+
+  <div style="overflow-x: auto; margin-top: 1rem;">
+    <table>
+      <thead>
+        <tr style="background: #f1f5f2;">
+          <th style="width: 140px;">Trace ID</th>
+          <th>Workflow Name</th>
+          <th style="width: 110px;">Status</th>
+          <th style="width: 90px;">Spans</th>
+          <th style="width: 110px;">Duration</th>
+          <th style="width: 120px;">Tokens</th>
+          <th style="width: 100px;">Cost</th>
+          <th style="width: 100px;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in traces %}
+        <tr style="cursor: pointer;" onclick="toggleWaterfall('{{ t.trace_id }}')">
+          <td><code style="font-weight: 600; color: #165e4b;">{{ t.trace_id }}</code></td>
+          <td><strong>{{ t.name }}</strong></td>
+          <td><span class="status {{ t.status }}">{{ t.status.upper() }}</span></td>
+          <td>{{ t.span_count }} spans</td>
+          <td><strong>{{ t.latency_ms }} ms</strong></td>
+          <td>{{ t.total_tokens }} toks</td>
+          <td>${{ "%.5f"|format(t.total_cost_usd) }}</td>
+          <td><button onclick="event.stopPropagation(); toggleWaterfall('{{ t.trace_id }}')" style="padding: 0.35rem 0.65rem; font-size: 0.8rem;">Waterfall</button></td>
+        </tr>
+        <tr id="waterfall-row-{{ t.trace_id }}" style="display: none; background: #fafcfa;">
+          <td colspan="8" style="padding: 1.25rem 1.5rem; border-bottom: 2px solid #d8e2dc;">
+            <div style="margin-bottom: 0.75rem; display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-weight: 600; font-size: 0.95rem; color: #102e29;">Trace Hierarchy: <code>{{ t.trace_id }}</code></span>
+              <span class="muted" style="font-size: 0.85rem;">Total Latency: {{ t.latency_ms }} ms · {{ t.span_count }} Spans</span>
+            </div>
+            
+            <div style="background: #ffffff; border: 1px solid #e1ebe5; border-radius: 8px; padding: 0.75rem;">
+              {% for s in t.spans %}
+              <div style="margin: 0.5rem 0; padding: 0.6rem; border-radius: 6px; background: #f7f9f7; border-left: 4px solid {% if s.kind == 'workflow' %}#176a50{% elif s.kind == 'retrieval' %}#0284c7{% elif s.kind == 'llm' %}#8b5cf6{% elif s.kind == 'evaluation' %}#f59e0b{% else %}#64748b{% endif %};">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+                  <div>
+                    <span style="background: #e2ede7; color: #102e29; font-size: 0.75rem; font-weight: 700; padding: 0.2rem 0.45rem; border-radius: 4px; text-transform: uppercase;">{{ s.kind }}</span>
+                    <strong style="margin-left: 0.5rem; font-size: 0.95rem;">{{ s.name }}</strong>
+                    <span class="muted" style="font-size: 0.8rem; margin-left: 0.5rem;">(span_id: {{ s.span_id }})</span>
+                  </div>
+                  <div>
+                    <strong style="color: #102e29;">{{ s.latency_ms }} ms</strong>
+                    <span class="status {{ s.status }}" style="margin-left: 0.5rem;">{{ s.status }}</span>
+                  </div>
+                </div>
+
+                <!-- Latency Bar Visualization -->
+                <div style="width: 100%; height: 6px; background: #e5ece8; border-radius: 3px; margin: 0.4rem 0; overflow: hidden;">
+                  {% set width_pct = (s.latency_ms / (t.latency_ms + 1) * 100) %}
+                  <div style="height: 100%; width: {{ width_pct if width_pct <= 100 else 100 }}%; background: {% if s.kind == 'workflow' %}#176a50{% elif s.kind == 'retrieval' %}#0284c7{% elif s.kind == 'llm' %}#8b5cf6{% elif s.kind == 'evaluation' %}#f59e0b{% else %}#64748b{% endif %};"></div>
+                </div>
+
+                <!-- Span Attributes Badge List -->
+                {% if s.attributes %}
+                <div style="display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.4rem;">
+                  {% for k, v in s.attributes.items() %}
+                  <span style="font-size: 0.78rem; background: #ffffff; border: 1px solid #d9e4de; padding: 0.15rem 0.4rem; border-radius: 4px; color: #374151;">
+                    <strong style="color: #165e4b;">{{ k }}:</strong> {{ v }}
+                  </span>
+                  {% endfor %}
+                </div>
+                {% endif %}
+              </div>
+              {% endfor %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+function toggleWaterfall(traceId) {
+  const row = document.getElementById('waterfall-row-' + traceId);
+  if (!row) return;
+  row.style.display = (row.style.display === 'none' || row.style.display === '') ? 'table-row' : 'none';
+}
+
+function refreshTraces() {
+  window.location.reload();
+}
+
+async function runLiveLLM() {
+  const input = document.getElementById('prompt-input');
+  const btn = document.getElementById('run-llm-btn');
+  const outBox = document.getElementById('llm-output');
+  const outText = document.getElementById('llm-response-text');
+  const badge = document.getElementById('llm-model-badge');
+  const stats = document.getElementById('llm-stats-badge');
+
+  const question = input.value.trim();
+  if (!question) return;
+
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+
+  try {
+    const res = await fetch('/api/v1/llm/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [
+          { role: 'system', content: 'You are CostGuard AI Assistant for AI DevOps and economic observability.' },
+          { role: 'user', content: question }
+        ]
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Inference error');
+
+    outBox.style.display = 'block';
+    badge.textContent = `Provider: ${data.provider} · Model: ${data.model}`;
+    stats.textContent = `${data.latency_ms}ms · ${data.total_tokens} tokens (TTFT: ${data.ttft_ms}ms) · Trace: ${data.trace_id}`;
+    outText.textContent = data.content;
+  } catch (err) {
+    alert('Execution error: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Execute LLM Call';
+  }
+}
+</script>
+{% endblock %}

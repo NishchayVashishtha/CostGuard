@@ -7,6 +7,8 @@ from .models import (
     MetricComparison,
     ModelCostComparison,
     MonthlyProjection,
+    OutcomeEconomics,
+    OutcomeMetrics,
     PolicyResult,
     Workload,
 )
@@ -95,11 +97,130 @@ def _paired_quality(
     )
 
 
+def _calculate_workload_outcome(workload: Workload, costs: dict[str, Decimal]) -> OutcomeMetrics:
+    total_tasks = len(workload.runs)
+    if total_tasks == 0:
+        return OutcomeMetrics(
+            total_tasks=0,
+            successful_tasks=0,
+            failed_tasks=0,
+            success_rate_percent=Decimal("0.00"),
+            cost_per_task_usd=Decimal("0.00000000"),
+            cost_per_successful_task_usd=Decimal("0.00000000"),
+            wasted_spend_usd=Decimal("0.00000000"),
+            wasted_spend_percent=Decimal("0.00"),
+            efficiency_score=Decimal("0.0000"),
+        )
+
+    total_cost = sum(costs.values(), Decimal("0"))
+    successful_runs = [
+        run for run in workload.runs
+        if getattr(run, "status", "ok") == "ok" and (run.quality_score is None or run.quality_score >= Decimal("0.70"))
+    ]
+    successful_tasks = len(successful_runs)
+    failed_tasks = total_tasks - successful_tasks
+
+    success_rate_percent = _round((Decimal(successful_tasks) / Decimal(total_tasks)) * 100, PERCENT_PRECISION)
+    cost_per_task = _round(total_cost / Decimal(total_tasks), MONEY_PRECISION)
+
+    if successful_tasks > 0:
+        cost_per_successful_task = _round(total_cost / Decimal(successful_tasks), MONEY_PRECISION)
+    else:
+        cost_per_successful_task = _round(total_cost, MONEY_PRECISION)
+
+    failed_case_ids = {run.case_id for run in workload.runs if run not in successful_runs}
+    wasted_spend = sum((costs[case_id] for case_id in failed_case_ids), Decimal("0"))
+    wasted_spend_usd = _round(wasted_spend, MONEY_PRECISION)
+
+    if total_cost > 0:
+        wasted_spend_percent = _round((wasted_spend / total_cost) * 100, PERCENT_PRECISION)
+    else:
+        wasted_spend_percent = Decimal("0.00")
+
+    if cost_per_successful_task > 0:
+        efficiency_score = _round(Decimal("100") / cost_per_successful_task, METRIC_PRECISION)
+    else:
+        efficiency_score = Decimal("0.0000")
+
+    return OutcomeMetrics(
+        total_tasks=total_tasks,
+        successful_tasks=successful_tasks,
+        failed_tasks=failed_tasks,
+        success_rate_percent=success_rate_percent,
+        cost_per_task_usd=cost_per_task,
+        cost_per_successful_task_usd=cost_per_successful_task,
+        wasted_spend_usd=wasted_spend_usd,
+        wasted_spend_percent=wasted_spend_percent,
+        efficiency_score=efficiency_score,
+    )
+
+
+def _calculate_outcome_economics(
+    baseline: Workload,
+    candidate: Workload,
+    baseline_costs: dict[str, Decimal],
+    candidate_costs: dict[str, Decimal],
+) -> OutcomeEconomics:
+    base_out = _calculate_workload_outcome(baseline, baseline_costs)
+    cand_out = _calculate_workload_outcome(candidate, candidate_costs)
+
+    cost_per_success_comp = _compare(
+        base_out.cost_per_successful_task_usd,
+        cand_out.cost_per_successful_task_usd,
+        MONEY_PRECISION,
+    )
+    sr_comp = _compare(
+        base_out.success_rate_percent,
+        cand_out.success_rate_percent,
+        PERCENT_PRECISION,
+    )
+    waste_comp = _compare(
+        base_out.wasted_spend_usd,
+        cand_out.wasted_spend_usd,
+        MONEY_PRECISION,
+    )
+
+    marginal = None
+    delta_success = cand_out.successful_tasks - base_out.successful_tasks
+    delta_total_cost = sum(candidate_costs.values(), Decimal("0")) - sum(baseline_costs.values(), Decimal("0"))
+    if delta_success > 0 and delta_total_cost > 0:
+        marginal = _round(delta_total_cost / Decimal(delta_success), MONEY_PRECISION)
+
+    if cand_out.cost_per_successful_task_usd > base_out.cost_per_successful_task_usd:
+        diff_pct = cost_per_success_comp.delta_percent or 0
+        summary = (
+            f"Candidate unit economics regressed: Effective Cost per Successful Outcome (ECSO) increased by "
+            f"{diff_pct}% to ${cand_out.cost_per_successful_task_usd} / task "
+            f"(Success Rate: {cand_out.success_rate_percent}% vs {base_out.success_rate_percent}%)."
+        )
+    elif cand_out.cost_per_successful_task_usd < base_out.cost_per_successful_task_usd:
+        summary = (
+            f"Candidate unit economics improved: Effective Cost per Successful Outcome (ECSO) decreased to "
+            f"${cand_out.cost_per_successful_task_usd} / task with {cand_out.success_rate_percent}% success rate."
+        )
+    else:
+        summary = (
+            f"Unit economics parity: Both workloads deliver successful outcomes at "
+            f"${cand_out.cost_per_successful_task_usd} / task."
+        )
+
+    return OutcomeEconomics(
+        baseline=base_out,
+        candidate=cand_out,
+        cost_per_successful_task=cost_per_success_comp,
+        success_rate=sr_comp,
+        wasted_spend=waste_comp,
+        marginal_cost_per_success_usd=marginal,
+        summary=summary,
+    )
+
+
 def _policy_result(
     request: ComparisonRequest,
     baseline_cost: Decimal,
     candidate_cost: Decimal,
     quality: MetricComparison | None,
+    outcome: OutcomeEconomics | None = None,
 ) -> PolicyResult:
     policy = request.policy
     if policy is None or not any(value is not None for value in policy.model_dump().values()):
@@ -129,6 +250,27 @@ def _policy_result(
             f"candidate cost ${displayed_cost} exceeds "
             f"${policy.max_candidate_cost_per_request_usd} per request"
         )
+
+    if policy.max_candidate_cost_per_successful_task_usd is not None and outcome is not None:
+        if outcome.candidate.cost_per_successful_task_usd > policy.max_candidate_cost_per_successful_task_usd:
+            violations.append(
+                f"candidate cost per successful task ${outcome.candidate.cost_per_successful_task_usd} "
+                f"exceeds ${policy.max_candidate_cost_per_successful_task_usd}"
+            )
+
+    if policy.min_candidate_task_success_rate_percent is not None and outcome is not None:
+        if outcome.candidate.success_rate_percent < policy.min_candidate_task_success_rate_percent:
+            violations.append(
+                f"candidate task success rate {outcome.candidate.success_rate_percent}% "
+                f"is below required {policy.min_candidate_task_success_rate_percent}%"
+            )
+
+    if policy.max_candidate_wasted_spend_percent is not None and outcome is not None:
+        if outcome.candidate.wasted_spend_percent > policy.max_candidate_wasted_spend_percent:
+            violations.append(
+                f"candidate wasted spend {outcome.candidate.wasted_spend_percent}% "
+                f"exceeds {policy.max_candidate_wasted_spend_percent}%"
+            )
 
     unknowns: list[str] = []
     if any(getattr(policy, field) is not None for field in (
@@ -218,9 +360,14 @@ def compare_workloads(request: ComparisonRequest) -> ComparisonReport:
         )
 
     quality, quality_cases_compared = _paired_quality(request)
+    outcome_economics = _calculate_outcome_economics(
+        request.baseline, request.candidate, baseline_costs, candidate_costs
+    )
+
     assumptions = [
         "Every workload case has equal weight.",
         "Costs use the supplied pricing catalog and observed token counts.",
+        "Outcome economics evaluates effective cost per successful task (ECSO) and wasted spend.",
     ]
     if quality is not None:
         assumptions.append(
@@ -247,6 +394,9 @@ def compare_workloads(request: ComparisonRequest) -> ComparisonReport:
         case_costs=case_costs,
         model_costs=model_costs,
         monthly_projection=monthly_projection,
-        policy=_policy_result(request, baseline_mean_cost, candidate_mean_cost, quality),
+        policy=_policy_result(
+            request, baseline_mean_cost, candidate_mean_cost, quality, outcome_economics
+        ),
         assumptions=assumptions,
+        outcome_economics=outcome_economics,
     )

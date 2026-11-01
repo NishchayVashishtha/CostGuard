@@ -56,6 +56,7 @@ class WorkloadRun(Schema):
     latency_ms: Decimal = Field(ge=0)
     quality_score: Decimal | None = Field(default=None, ge=0, le=1)
     additional_charges_usd: Decimal = Field(default=Decimal("0"), ge=0)
+    status: Literal["ok", "error", "cancelled"] = Field(default="ok")
 
 
 class Workload(Schema):
@@ -80,6 +81,9 @@ class ComparisonPolicy(Schema):
     max_candidate_retries_per_case: Decimal | None = Field(default=None, ge=0)
     max_candidate_tool_steps_per_case: Decimal | None = Field(default=None, ge=0)
     max_candidate_agent_steps_per_case: Decimal | None = Field(default=None, ge=0)
+    max_candidate_cost_per_successful_task_usd: Decimal | None = Field(default=None, ge=0)
+    min_candidate_task_success_rate_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    max_candidate_wasted_spend_percent: Decimal | None = Field(default=None, ge=0, le=100)
 
 
 class ComparisonRequest(Schema):
@@ -138,6 +142,28 @@ class MonthlyProjection(Schema):
     cost_usd: MetricComparison
 
 
+class OutcomeMetrics(Schema):
+    total_tasks: int = Field(ge=0)
+    successful_tasks: int = Field(ge=0)
+    failed_tasks: int = Field(ge=0)
+    success_rate_percent: Decimal = Field(ge=0, le=100)
+    cost_per_task_usd: Decimal = Field(ge=0)
+    cost_per_successful_task_usd: Decimal = Field(ge=0)
+    wasted_spend_usd: Decimal = Field(ge=0)
+    wasted_spend_percent: Decimal = Field(ge=0, le=100)
+    efficiency_score: Decimal = Field(ge=0)
+
+
+class OutcomeEconomics(Schema):
+    baseline: OutcomeMetrics
+    candidate: OutcomeMetrics
+    cost_per_successful_task: MetricComparison
+    success_rate: MetricComparison
+    wasted_spend: MetricComparison
+    marginal_cost_per_success_usd: Decimal | None = None
+    summary: str = Field(min_length=1)
+
+
 class PolicyResult(Schema):
     status: Literal["not_evaluated", "pass", "fail", "inconclusive"]
     violations: list[str]
@@ -158,3 +184,4 @@ class ComparisonReport(Schema):
     monthly_projection: MonthlyProjection | None
     policy: PolicyResult
     assumptions: list[str]
+    outcome_economics: OutcomeEconomics | None = Field(default=None)

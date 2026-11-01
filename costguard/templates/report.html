@@ -5,6 +5,35 @@
 {% if r.economic %}{% set e=r.economic %}<div class="grid"><div class="card"><h2>Cost / request</h2><div class="metric">${{e.cost_per_request_usd.candidate|money}}</div><p>Before ${{e.cost_per_request_usd.baseline|money}} · Change {{e.cost_per_request_usd.delta_percent}}%</p></div>
 <div class="card"><h2>Mean latency</h2><div class="metric">{{e.mean_latency_ms.candidate}} ms</div><p>Change {{e.mean_latency_ms.delta_percent}}%</p></div><div class="card"><h2>Quality</h2><div class="metric">{{e.quality_score.candidate if e.quality_score else 'Unknown'}}</div><p>{{e.quality_cases_compared}} scored pairs</p></div>
 {% if e.monthly_projection %}<div class="card"><h2>Projected monthly</h2><div class="metric">${{e.monthly_projection.cost_usd.candidate|money}}</div><p>Change ${{e.monthly_projection.cost_usd.delta|money}}</p></div>{% endif %}</div>{% endif %}
+{% set out = r.outcome_economics or (r.economic.outcome_economics if r.economic else none) %}
+{% if out %}
+<section class="card" style="border-left: 4px solid #176a50; background: linear-gradient(145deg, #ffffff, #f7faf8);">
+  <h2>Economics of Successful Outcomes (Unit Economics)</h2>
+  <p class="muted" style="margin-top: 0.2rem;">{{ out.summary }}</p>
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 1rem;">
+    <div style="background: white; border: 1px solid #d8e2dc; border-radius: 8px; padding: 0.8rem;">
+      <span class="muted" style="font-size: 0.85rem; text-transform: uppercase;">Cost / Successful Task (ECSO)</span>
+      <div style="font-size: 1.4rem; font-weight: 700; color: #102e29; margin-top: 0.3rem;">${{ out.candidate.cost_per_successful_task_usd|money }}</div>
+      <p class="muted" style="font-size: 0.85rem; margin: 0.2rem 0 0;">Before ${{ out.baseline.cost_per_successful_task_usd|money }} · Change {{ out.cost_per_successful_task.delta_percent }}%</p>
+    </div>
+    <div style="background: white; border: 1px solid #d8e2dc; border-radius: 8px; padding: 0.8rem;">
+      <span class="muted" style="font-size: 0.85rem; text-transform: uppercase;">Task Success Rate</span>
+      <div style="font-size: 1.4rem; font-weight: 700; color: #176a50; margin-top: 0.3rem;">{{ out.candidate.success_rate_percent }}%</div>
+      <p class="muted" style="font-size: 0.85rem; margin: 0.2rem 0 0;">Before {{ out.baseline.success_rate_percent }}% ({{ out.candidate.successful_tasks }}/{{ out.candidate.total_tasks }} tasks passed)</p>
+    </div>
+    <div style="background: white; border: 1px solid #d8e2dc; border-radius: 8px; padding: 0.8rem;">
+      <span class="muted" style="font-size: 0.85rem; text-transform: uppercase;">Wasted Spend (Failed Tasks)</span>
+      <div style="font-size: 1.4rem; font-weight: 700; color: {% if out.candidate.wasted_spend_usd > 0 %}#a64622{% else %}#176a50{% endif %}; margin-top: 0.3rem;">${{ out.candidate.wasted_spend_usd|money }}</div>
+      <p class="muted" style="font-size: 0.85rem; margin: 0.2rem 0 0;">{{ out.candidate.wasted_spend_percent }}% of total workload spend</p>
+    </div>
+    <div style="background: white; border: 1px solid #d8e2dc; border-radius: 8px; padding: 0.8rem;">
+      <span class="muted" style="font-size: 0.85rem; text-transform: uppercase;">Economic Efficiency Score</span>
+      <div style="font-size: 1.4rem; font-weight: 700; color: #102e29; margin-top: 0.3rem;">{{ out.candidate.efficiency_score }}</div>
+      <p class="muted" style="font-size: 0.85rem; margin: 0.2rem 0 0;">Successful outcomes per $100 budget</p>
+    </div>
+  </div>
+</section>
+{% endif %}
 <div class="grid"><section class="card"><h2>Execution behavior / case</h2><p>Model calls: {{r.model_calls.baseline}} → {{r.model_calls.candidate}}</p><p>Retries: {{r.retries.baseline}} → {{r.retries.candidate}}</p><p>Tool steps: {{r.tool_steps.baseline}} → {{r.tool_steps.candidate}}</p><p>P95 latency: {{r.p95_latency_ms.candidate if r.p95_latency_ms else 'Unknown'}} ms</p></section>
 <section class="card"><h2>Policy</h2><p class="status {{r.policy.status}}">{{r.policy.status}}</p><ul>{% for v in r.policy.violations %}<li>{{v}}</li>{% endfor %}{% for u in r.policy.unknowns %}<li>{{u}}</li>{% endfor %}</ul></section></div>
 {% if r.contributors %}<section class="card"><h2>Largest observed cost increases</h2><ul>{% for c in r.contributors %}<li>{{c}}</li>{% endfor %}</ul></section>{% endif %}
