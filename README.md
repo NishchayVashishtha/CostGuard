@@ -1,69 +1,135 @@
 # CostGuard
 
-CostGuard is a local prototype for model-led economic investigation and pre-deployment regression testing of AI workloads. An analyst model can inspect saved comparisons and cases, propose a prompt experiment, and help you measure its outcome. The economic engine compares observed cost, latency, quality and execution behavior and applies explicit policies.
+**CostGuard** is an **economic intelligence, profiling, distributed observability, and pre-deployment regression-testing layer for AI applications and agentic workloads**.
 
-For the intended product direction beyond this prototype, see [VISION.md](VISION.md).
+CostGuard helps engineering teams understand the financial, behavioral, and quality consequences of an AI/LLM change *before it reaches production*: what became more expensive, why, whether latency or task success rates regressed, and whether proposed modifications satisfy explicit economic policies.
 
-## Quick demo
+---
 
-Requires Docker Compose. All published ports bind to localhost. Before adding real provider keys, copy `.env.example` to `.env` and replace its passwords and gateway secrets.
+## Key Pillars
 
-```bash
-COSTGUARD_DEMO=1 docker compose --profile demo up -d --build --wait
-```
+### 1. Unified LLM Execution Engine
+- **Multi-Provider Support**: Direct integration with OpenAI (`gpt-4o`, `gpt-4o-mini`), Google Gemini (`gemini-1.5-flash`), Anthropic (`claude-3-5-sonnet`), Groq (`llama-3.3-70b`), local Ollama (`llama3`), and OpenAI-compatible gateways (e.g., Bifrost).
+- **Intelligent Contextual Fallback (`IntelligentOfflineSimulator`)**: Built-in offline simulator that enables complete local development, demonstration, and automated test execution without external paid API keys.
+- **RAG Codebase & Policy Q&A**: Semantic document indexing and grounded LLM synthesis via `CostGuardRAGBot`.
 
-Open [CostGuard](http://localhost:8000) and click **Create demo comparison**. CostGuard registers its mock provider, runs paired cases, and opens the report. Click **Investigate this comparison**, then start the investigation. Review the findings and proposal, click **Run proposed experiment**, and compare the completed result against the original baseline. If an analyst was already configured, the demo preserves it: check the displayed analyst before starting an investigation.
+### 2. Distributed Observability & Telemetry
+- **OpenTelemetry Standard Tracing**: Full parent-child span hierarchy tracking complete task lifecycles: `workflow` $\rightarrow$ `retrieval` $\rightarrow$ `llm` $\rightarrow$ `evaluation`.
+- **Granular Latency & Token Metrics**:
+  - **Streaming TTFT (Time To First Token)** tracking.
+  - **P50 / P90 / P95 Latency** profiling.
+  - **Token Throughput (tokens/second)** and Prompt vs. Completion token distribution.
+  - **Error and Regression Rates** across workflow executions.
+- **Observability Dashboard (`/observability`)**:
+  - Interactive telemetry KPI cards.
+  - Hierarchical visual waterfall / Gantt latency flame bars for each trace.
+  - Live interactive LLM sandbox.
+  - One-click OpenTelemetry standard JSON export.
 
-The mock workload and scripted mock analyst require no paid model or downloaded Ollama model. The analyst exercises the integration; it does not demonstrate real model reasoning. Bifrost is available at [localhost:8080](http://localhost:8080). Its setup token is `costguard-local-setup-change-me` unless changed in `.env`. Finish Bifrost's admin setup before adding real keys; its dashboard/API are unprotected until an admin account exists. The browser demo setup action is only available when `COSTGUARD_DEMO=1`.
+### 3. Economics of Successful Outcomes (Unit Economics)
+Traditional AI monitoring measures raw cost per token or cost per API call, which fails to capture real workflow value. CostGuard pioneers **Outcome Economics**:
+- **Cost per Task ($/Task)**: Total workload spend divided by total attempted requests.
+- **Effective Cost per Successful Outcome (ECSO - $/Success)**:
+  $$\text{ECSO} = \frac{\text{Total Workload Cost}}{\text{Successful Tasks}} = \frac{\text{Cost per Attempt}}{\text{Task Success Rate}}$$
+  *Catches hidden economic regressions where a cheaper model fails more frequently, doubling the effective cost per completed outcome.*
+- **Wasted Spend ($ & %)**: Quantifies capital lost to failed tasks, validation rejections, and unnecessary retries.
+- **Economic Efficiency Score**: Successful business outcomes delivered per $100 budget.
+- **CI/CD Regression Gates**: Automated policies enforcing caps on `max_candidate_cost_per_successful_task_usd`, `min_candidate_task_success_rate_percent`, and `max_candidate_wasted_spend_percent`.
 
-To run the bundled baseline and candidate from a terminal:
+---
 
-```bash
-docker compose --profile demo exec -T app python -m costguard.bootstrap_gateway
-docker compose --profile demo exec -T app python -m costguard run examples/experiment_baseline.json --wait
-docker compose --profile demo exec -T app python -m costguard run examples/experiment_candidate.json --wait
-```
+## Quickstart
 
-Copy their artifact IDs from the output, then select them on the CostGuard **Reports** page. The candidate's longer system prompt costs more on the mock workload, so the default 10% regression policy fails. You can also edit and launch experiments on the **Experiments** page. Start the stack again later without `--build`; PostgreSQL and Bifrost data live in named volumes.
-
-## Using your own model
-
-Start `--profile gateway` for cloud or other OpenAI-compatible providers, or `--profile local` to also start Ollama. Configure provider URL, API key, and models in Bifrost's UI, then use its `provider/model` pair in an experiment specification. For a provider on your private network, Bifrost requires an explicit private-network allowance in its provider settings. CostGuard never stores provider keys in experiment artifacts. Pricing is supplied as a versioned catalog in the experiment or comparison request; Bifrost's routing does not silently determine comparison prices.
-
-The browser/API is at `localhost:8000`, Bifrost at `localhost:8080`, and API docs at `localhost:8000/docs`. The stack has an app, a sequential job runner, PostgreSQL, and Bifrost; Ollama and the mock provider are profile-specific. The app runs its database migration on startup.
-
-## Configure a real analyst
-
-1. Configure a local or cloud model in Bifrost with chat tool-calling support.
-2. On **Connections**, enter its `provider/model` ID, explicit input/output prices, a pricing version, and investigation limits. These settings are separate from the workload model and are snapshotted for each investigation. Provider credentials remain in Bifrost. If inference requires a Bifrost virtual key, set `BIFROST_VIRTUAL_KEY` in `.env` and recreate the app and runner.
-3. On **Investigations**, select a comparison and ask a question. The runner executes a bounded tool loop: inspect comparison, inspect cases, optionally propose one prompt experiment, and return findings with references to inspected evidence.
-4. Review and explicitly run a proposal. CostGuard preserves the source case suite, workload model, pricing and execution limits. It queues the proposal once, then compares its measured result to the original baseline and policy. You can start another investigation on that result.
-
-The analyst receives selected report/configuration data and available case inputs requested through its tools. Findings are model interpretations; validated evidence references do not prove every claim is correct. Numerical policy results remain computed by the economic engine. Model calls and analyst spend are recorded separately, with no automatic retry or replay after a lost lease. Spend thresholds are checked between calls, not guaranteed caps on in-flight charges. Missing analyst usage stops the loop with unknown cost. A cancelled investigation stops further calls after the current request.
-
-Investigations, settings and measured outcomes are persisted in PostgreSQL. The API exposes `/api/v1/analyst` and `/api/v1/investigations`; MCP can list/read investigations without initiating paid calls. Imported artifacts can be investigated, but an executable proposal requires the candidate's original CostGuard job specification.
-
-## Evidence and decisions
-
-- Versioned JSON execution artifacts contain case IDs, model calls, usage provenance, latency, steps, optional quality scores, and optional non-model charges. They can be imported through `POST /api/v1/artifacts` or `python -m costguard import <file>`.
-- `costguard.hook.ArtifactRecorder` is an opt-in Python hook for existing applications: wrap each case, record actual OpenAI-compatible responses plus tool/retrieval steps and optional quality, then export `recorder.artifact().model_dump_json()`. It does not intercept SDK calls automatically.
-- Experiments support prompt/model changes and a bounded word-count tool example. Each run has case, time, retry, step, tool, output-token, and optional spend limits. The runner does not replay paid calls after a lost job lease.
-- Reports compare matched cases on one supplied pricing catalog, attribute model and case cost changes, show mean and p95 cost/latency, model calls, retries, tool/agent steps, exact-match quality where available, and optional monthly projection. Missing usage or failed cases produce an inconclusive economic result instead of a false pass.
-- Policies can gate cost per request, regression percentage, projected monthly cost, latency, quality, retries, steps, and model usage. A hypothetical repricing scenario holds observed execution behavior fixed; it is not a prediction of model quality or routing behavior.
-- `python -m costguard gate --baseline <artifact.json> --candidate <artifact.json> --pricing <pricing.json> --policy <policy.json>` exits 0 for pass, 1 for fail, and 2 for inconclusive/error. `--json-output` and `--markdown-output` export reports for CI.
-- `python -m costguard.mcp_server` exposes read-only MCP queries for saved workload economics and comparisons. It does not initiate paid executions.
-
-The original stateless `POST /compare` endpoint remains available, including `examples/comparison.json`.
-
-## Verify
+### 1. Installation
+Clone the repository and install dependencies:
 
 ```bash
-docker compose --profile demo run --rm --no-deps app python -m unittest discover -v
-docker compose --profile demo exec -T app python -m tests.e2e
+git clone https://github.com/NishchayVashishtha/CostGuard.git
+cd CostGuard
+pip install -r requirements.txt
 ```
 
-GitHub Actions runs both checks against the demo stack. Tests use generated cases and deterministic assertions, not an external test-generation service.
+### 2. Start the Local Web Server
+Launch the FastAPI application with live hot-reloading:
 
-## Prototype boundaries
+```bash
+python -m uvicorn main:app --host 127.0.0.1 --port 8000
+```
 
-This is a single-user, local-first prototype. It does not yet capture production traces, model routing probabilities, weighted traffic, automatic application instrumentation, RAG behavior, or quality beyond explicit case evaluators. It does not guarantee a spending cap for an in-flight call; the runner checks its spend threshold between cases. Gateway administration and provider credentials stay in Bifrost, while CostGuard owns the experiment evidence and economic decisions. Do not expose this stack publicly without adding authentication, TLS, and secret management.
+Open in your browser:
+- **Observability Dashboard**: [http://localhost:8000/observability](http://localhost:8000/observability)
+- **Overview & Reports**: [http://localhost:8000/](http://localhost:8000/)
+- **Interactive OpenAPI Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+---
+
+## Live Demonstrations
+
+CostGuard includes three ready-to-run demonstration scripts:
+
+### A. Live RAG + LLM + Observability Demonstration
+Demonstrates grounded semantic retrieval, live LLM generation, distributed tracing with TTFT, and context inflation profiling ($k=2$ vs $k=8$ chunks):
+
+```bash
+python demo_rag.py
+```
+
+### B. Mid-Semester Project Evaluation & Gating
+Demonstrates baseline vs candidate workload comparison, quantitative unit economics, policy enforcement, and autonomous AI investigator root-cause diagnosis:
+
+```bash
+python demo_eval.py
+```
+
+### C. CI/CD Automated PR Review Bot Simulator
+Emulates an automated GitHub Actions PR reviewer (Sweep.dev / CodiumAI style) that evaluates Pull Request economic impact and blocks merge on policy violations:
+
+```bash
+python simulate_pr_bot.py
+```
+
+---
+
+## Running the Automated Test Suite
+
+Run the complete test suite (39 unit and integration tests covering analysis, execution, RAG pipeline, LLMs, distributed tracing, and outcome economics):
+
+```bash
+python -m unittest discover -v
+```
+
+---
+
+## REST API Overview
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/health` | Service health check |
+| `POST` | `/api/v1/llm/chat` | Execute chat completion with automated observability tracing |
+| `GET` | `/api/v1/observability/traces` | List recent distributed traces and span hierarchies |
+| `GET` | `/api/v1/observability/traces/{id}`| Retrieve detailed span waterfall for a specific trace |
+| `GET` | `/api/v1/observability/metrics` | Retrieve aggregated latency, TTFT, token throughput & error rates |
+| `GET` | `/api/v1/observability/otel` | Export traces in OpenTelemetry standard JSON format |
+| `POST` | `/compare` | Stateless economic regression comparison for two workloads |
+| `GET` | `/api/v1/comparisons` | List saved workload comparisons |
+| `POST` | `/api/v1/scenarios` | Evaluate hypothetical repricing scenarios |
+
+---
+
+## Docker Compose (Optional Full Stack)
+
+For containerized environments with PostgreSQL and the Bifrost gateway:
+
+```bash
+# Copy local configuration
+cp .env.example .env
+
+# Start demo profile
+COSTGUARD_DEMO=1 docker compose --profile demo up -d --build
+```
+
+---
+
+## License
+
+This project is licensed under the Apache 2.0 License.
